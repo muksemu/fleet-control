@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>Fleet Control | Логистика</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="{{ url_for('static', path='styles_МКО.css') }}">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+  <script type="module" src="{{ url_for('static', path='js/app.js') }}"></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-square">F</span><div><strong>Fleet Control</strong><small>ЛОГИСТИКА И ТРАНСПОРТ</small></div></div>
+      <div class="nav-caption">ОПЕРАЦИИ</div>
+      <nav class="navigation" aria-label="Разделы">
+        <button class="nav-link active" data-view="overview"><span class="nav-symbol">◫</span> Обзор</button>
+        <button class="nav-link" data-view="fleet"><span class="nav-symbol">▤</span> Автопарк</button>
+        <button class="nav-link" data-view="trips"><span class="nav-symbol">⇄</span> Рейсы</button>
+        <button class="nav-link" data-view="events"><span class="nav-symbol">◷</span> История событий</button>
+        <button class="nav-link" data-view="account"><span class="nav-symbol">◎</span> Личный кабинет</button>
+      </nav>
+      <div class="sidebar-footer">
+        <span class="side-label">РАБОЧЕЕ ПРОСТРАНСТВО</span>
+        <strong>Управление перевозками</strong>
+        <span class="side-helper" id="sidebar-account-name">{{ user.name }}</span>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div class="topbar-spacer"></div>
+        <div class="top-actions">
+          <span class="connection"><i id="connection-dot"></i><span id="connection-text">Соединение…</span></span>
+          <button type="button" class="account-link" data-view="account" id="header-account">{{ user.name }}</button>
+          <form method="post" action="{{ url_for('auth.logout') }}" class="logout-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="logout-button">Выйти</button>
+          </form>
+        </div>
+      </header>
+      <main>
+        <div class="heading-row">
+          <div><p class="eyebrow" id="page-eyebrow">ЦЕНТР УПРАВЛЕНИЯ ПЕРЕВОЗКАМИ</p><h1 id="page-title">Оперативная сводка</h1><p class="page-description" id="page-description">Транспорт, рейсы и события в единой рабочей области</p></div>
+          <div class="header-controls" id="header-controls"><span class="last-update" id="last-update">Данные не загружены</span><button type="button" class="secondary-button" id="refresh">↻ Обновить</button></div>
+        </div>
+        <div class="notification" id="error" role="alert" hidden></div>
+
+        <section class="view" id="view-overview">
+          <div class="metric-grid">
+            <article class="metric"><span>Всего транспорта</span><div class="metric-number" id="stat-total">—</div><small>В реестре автопарка</small></article>
+            <article class="metric"><span>В пути</span><div class="metric-number" id="stat-driving">—</div><small>Доступные данные о статусах</small></article>
+            <article class="metric"><span>На месте</span><div class="metric-number" id="stat-home">—</div><small>Ожидают рейса или стоят</small></article>
+            <article class="metric"><span>На ремонте</span><div class="metric-number" id="stat-repair">—</div><small>Требуют внимания</small></article>
+          </div>
+          <section class="panel alert-panel" aria-live="polite">
+            <div class="panel-heading"><div><h2>Требует внимания <span id="alerts-count" class="count-label">0</span></h2><p>Просроченные рейсы и отсутствие свежих GPS-координат</p></div></div>
+            <div id="overview-alerts" class="alert-list"><p class="empty">Загрузка…</p></div>
+          </section>
+          <div class="overview-grid">
+            <section class="panel map-panel">
+              <div class="panel-heading"><div><h2>Расположение транспорта</h2><p>Линии между городами схематические, не автомобильные дороги</p></div><span class="outline-label">GPS-симулятор</span></div>
+              <div id="map" aria-label="Карта расположения грузовиков"><div id="map-loading">Загрузка карты…</div></div>
+              <div class="map-footer"><span><i class="legend-dot dark"></i>Транспорт с координатами: <strong id="map-count">0</strong></span><span id="gps-state">GPS-источник не подключён</span></div>
+            </section>
+            <section class="panel active-panel">
+              <div class="panel-heading"><div><h2>Активные рейсы</h2><p>Запланированные и выполняемые</p></div><button class="text-button" data-go="trips">Все рейсы ↗</button></div>
+              <div id="overview-trips" class="trip-stack"><p class="empty">Загрузка…</p></div>
+            </section>
+          </div>
+          <div class="overview-bottom">
+            <section class="panel activity-panel"><div class="panel-heading"><div><h2>Последние события</h2><p>Изменения в системе</p></div><button class="text-button" data-go="events">История ↗</button></div><div id="overview-events"></div></section>
+            <section class="panel summary-panel"><div class="panel-heading"><div><h2>Структура автопарка</h2><p>Распределение по статусам</p></div></div><div id="distribution" class="distribution"></div></section>
+          </div>
+        </section>
+
+        <section class="view" id="view-fleet" hidden>
+          <section class="panel fleet-panel">
+            <div class="panel-heading"><div><h2>Реестр транспорта <span class="count-label" id="fleet-count">—</span></h2><p>Откройте машину для просмотра данных и управления статусом</p></div>{% if user.role == 'admin' %}<button type="button" class="primary-button" id="new-truck">+ Добавить грузовик</button>{% endif %}</div>
+            <div class="table-controls"><input id="search" type="search" placeholder="Поиск по машине, ID или водителю" aria-label="Поиск по автопарку"><select id="fleet-filter" aria-label="Фильтр по статусу"><option value="">Все статусы</option><option>В пути</option><option>На месте</option><option>На ремонте</option></select></div>
+            <div class="table-wrap"><table><thead><tr><th>ID</th><th>Транспорт</th><th>Водитель</th><th>Текущий статус</th><th></th></tr></thead><tbody id="fleet-table"></tbody></table></div>
+          </section>
+        </section>
+
+        <section class="view" id="view-trips" hidden>
+          <section class="panel">
+            <div class="panel-heading"><div><h2>Журнал рейсов</h2><p>Назначение транспорта и контроль исполнения</p></div><button class="primary-button" id="new-trip">+ Создать рейс</button></div>
+            <div class="table-wrap"><table><thead><tr><th>РЕЙС</th><th>ТРАНСПОРТ</th><th>МАРШРУТ</th><th>ОЖИДАЕМОЕ ПРИБЫТИЕ</th><th>СТАТУС</th><th>ДЕЙСТВИЕ</th></tr></thead><tbody id="trips-table"></tbody></table></div>
+          </section>
+        </section>
+
+        <section class="view" id="view-events" hidden>
+          <section class="panel"><div class="panel-heading"><div><h2>Журнал событий</h2><p>Действия, сохранённые в базе данных</p></div><span class="outline-label">Последние 30 записей</span></div><div id="events-table" class="events-list"></div></section>
+        </section>
+
+        <section class="view" id="view-account" hidden>
+          <div class="account-grid">
+            <section class="panel account-panel">
+              <div class="panel-heading"><div><h2>Профиль</h2><p>Данные учётной записи</p></div></div>
+              <div class="account-body">
+                <div class="profile-avatar" aria-hidden="true">{{ user.name[:1]|upper }}</div>
+                <div class="profile-name" id="profile-current-name">{{ user.name }}</div>
+                <p class="profile-email">{{ user.email }}</p>
+                <dl class="info-list">
+                  <div><dt>Email для входа</dt><dd>{{ user.email }}</dd></div>
+                  <div><dt>Дата регистрации</dt><dd>{{ user.created_at.strftime('%d.%m.%Y') }}</dd></div>
+                  <div><dt>Роль</dt><dd>{{ 'Администратор' if user.role == 'admin' else 'Диспетчер' }}</dd></div>
+                </dl>
+                <form id="profile-name-form" class="account-form">
+                  <label for="account-name">Имя пользователя</label>
+                  <input type="text" id="account-name" value="{{ user.name }}" minlength="2" maxlength="80" autocomplete="name" required>
+                  <p class="account-message" id="name-message" role="status" hidden></p>
+                  <button type="submit" class="primary-button">Сохранить имя</button>
+                </form>
+              </div>
+            </section>
+            <section class="panel account-panel">
+              <div class="panel-heading"><div><h2>Безопасность</h2><p>Смена пароля для входа</p></div></div>
+              <div class="account-body">
+                <form id="password-form" class="account-form">
+                  <label for="old-password">Текущий пароль</label>
+                  <input id="old-password" type="password" autocomplete="current-password" required>
+                  <label for="new-password">Новый пароль</label>
+                  <input id="new-password" type="password" minlength="10" maxlength="128" autocomplete="new-password" required>
+                  <label for="confirm-password">Повтори новый пароль</label>
+                  <input id="confirm-password" type="password" minlength="10" maxlength="128" autocomplete="new-password" required>
+                  <p class="field-hint">Не менее 10 символов. Пароль сохраняется в защищённом виде.</p>
+                  <p class="account-message" id="password-message" role="status" hidden></p>
+                  <button type="submit" class="primary-button">Изменить пароль</button>
+                </form>
+              </div>
+            </section>
+          </div>
+          {% if user.role == 'admin' %}
+          <section class="panel staff-panel" id="staff-panel">
+            <div class="panel-heading"><div><h2>Сотрудники</h2><p>Заявки на регистрацию, роли и доступ к системе</p></div></div>
+            <div class="staff-body">
+              <div id="staff-error" class="account-message" role="status" hidden></div>
+              <p class="field-hint">Самостоятельная регистрация создаёт аккаунт без доступа. Здесь администратор может разрешить вход.</p><div id="staff-list" class="staff-list" data-current-user-id="{{ user.id }}"><p class="empty">Загрузка…</p></div>
+              <form id="staff-form" class="staff-form">
+                <h3>Добавить диспетчера</h3>
+                <label>Имя<input id="staff-name" maxlength="80" minlength="2" required></label>
+                <label>Email<input id="staff-email" type="email" required></label>
+                <label>Начальный пароль<input id="staff-password" type="password" minlength="10" maxlength="128" autocomplete="new-password" required></label>
+                <button class="primary-button" type="submit">Создать сотрудника</button>
+                <p class="field-hint">Передай начальный пароль сотруднику безопасным способом. Он сможет заменить его в своём профиле.</p>
+              </form>
+            </div>
+          </section>
+          {% endif %}
+        </section>
+
+      </main>
+    </div>
+  </div>
+
+  {% if user.role == 'admin' %}
+  <dialog id="staff-role-dialog" aria-labelledby="staff-role-title">
+    <form id="staff-role-form">
+      <div class="dialog-heading">
+        <div><h2 id="staff-role-title">Изменение роли</h2><p id="staff-role-description"></p></div>
+        <button type="button" class="close-button" id="close-staff-role" aria-label="Закрыть">×</button>
+      </div>
+      <label for="staff-role-password">Подтверди свой пароль администратора</label>
+      <input id="staff-role-password" type="password" autocomplete="current-password" required>
+      <p class="dialog-error" id="staff-role-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" id="cancel-staff-role" class="secondary-button">Отмена</button>
+        <button type="submit" id="confirm-staff-role" class="primary-button">Сохранить роль</button>
+      </div>
+    </form>
+  </dialog>
+  {% endif %}
+
+  <dialog id="truck-dialog" aria-labelledby="truck-dialog-title">
+    <div class="truck-dialog-heading">
+      <div><p class="truck-dialog-kicker">АВТОПАРК</p><h2 id="truck-dialog-title">Карточка транспорта</h2></div>
+      <button type="button" class="close-button" id="close-truck-dialog" aria-label="Закрыть карточку">×</button>
+    </div>
+    <div class="dialog-error truck-dialog-error" id="truck-error" role="alert" hidden></div>
+    <div class="truck-dialog-content" id="fleet-detail"></div>
+    <div class="truck-dialog-footer">
+      <button type="button" class="secondary-button" id="close-truck-footer">Закрыть</button>
+    </div>
+  </dialog>
+
+  {% if user.role == 'admin' %}
+  <dialog id="new-truck-dialog" aria-labelledby="new-truck-title">
+    <form id="new-truck-form">
+      <div class="dialog-heading">
+        <div><h2 id="new-truck-title">Новый грузовик</h2><p>Добавить транспорт в автопарк</p></div>
+        <button type="button" class="close-button" id="close-new-truck" aria-label="Закрыть">×</button>
+      </div>
+      <p class="dialog-error" id="new-truck-error" role="alert" hidden></p>
+      <label>Название<input id="new-truck-name" maxlength="100" placeholder="Например, КАМАЗ 5490" required></label>
+      <label>Водитель<input id="new-truck-driver" maxlength="100" value="Не назначен" required></label>
+      <p class="field-hint">Статус новой машины — «На месте». ID выдаст PostgreSQL.</p>
+      <div class="dialog-actions">
+        <button type="button" class="secondary-button" id="cancel-new-truck">Отмена</button>
+        <button type="submit" class="primary-button">Добавить</button>
+      </div>
+    </form>
+  </dialog>
+  {% endif %}
+
+  <dialog id="trip-dialog">
+    <form id="trip-form">
+      <div class="dialog-heading"><div><h2>Новый рейс</h2><p>Заполните данные для назначения перевозки</p></div><button type="button" class="close-button" id="close-dialog" aria-label="Закрыть">×</button></div>
+      <div class="dialog-error" id="trip-error" role="alert" hidden></div>
+      <label>Транспорт<select id="trip-truck" required></select></label>
+      <label>Откуда<input id="trip-origin" maxlength="100" required list="route-city-options" placeholder="Например, Москва"></label>
+      <label>Куда<input id="trip-destination" maxlength="100" required list="route-city-options" placeholder="Например, Екатеринбург"></label>
+      <datalist id="route-city-options">{% for city in route_cities %}<option value="{{ city }}">{% endfor %}</datalist>
+      <p class="field-hint">Для тестового GPS выбирай города из подсказок. Новые города можно добавить в справочник.</p>
+      <label>Ожидаемое прибытие<input type="datetime-local" id="trip-eta" required></label>
+      <div class="dialog-actions"><button type="button" class="secondary-button" id="cancel-trip">Отмена</button><button type="submit" class="primary-button">Создать рейс</button></div>
+    </form>
+  </dialog>
+</body>
+</html>
